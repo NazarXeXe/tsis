@@ -21,7 +21,7 @@ if (__name__ == "__main__"):
         Student('Alice'),
         Human('John'),
         Human('James'),
-        Student('Jacl')
+        Student('Jack')
     ]
 
     for human in group:
