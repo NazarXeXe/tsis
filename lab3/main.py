@@ -24,7 +24,7 @@ def kvArgs(**args):
     for i in args:
         print(i, args[i])
 
-if (__name__ == "__main__"):    
+if __name__ == "__main__":
     human = Human('Bob')
     student = Student('Alex')
     human.eat()
