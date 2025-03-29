@@ -17,12 +17,15 @@ BLACK = (0, 0, 0)
 WHITE = (255, 255, 255)
 GREEN = (0, 255, 0)
 RED = (255, 0, 0)
+GOLD = (255, 215, 0)
+BLUE = (0, 0, 255)
+PURPLE = (128, 0, 128)
 DARK_GREEN = (0, 100, 0)
 GRAY = (100, 100, 100)
 
 # Set up display
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption("Snake Game")
+pygame.display.set_caption("Enhanced Snake Game")
 
 # Game variables
 move_interval = 0.1  # Seconds between snake movements
@@ -30,13 +33,14 @@ move_timer = 0
 
 # Font for UI
 font = pygame.font.SysFont(None, 36)
+small_font = pygame.font.SysFont(None, 20)
 
 
 class Snake:
     def __init__(self):
         self.positions = [(GRID_WIDTH // 2, GRID_HEIGHT // 2)]
         self.direction = (1, 0)  # Start moving right
-        self.grow_pending = False
+        self.grow_pending = 0  # Number of segments to grow
         self.is_alive = True
         self.last_direction = self.direction
 
@@ -68,15 +72,15 @@ class Snake:
         self.positions.insert(0, (new_x, new_y))
 
         # Remove tail if not growing
-        if not self.grow_pending:
-            self.positions.pop()
+        if self.grow_pending > 0:
+            self.grow_pending -= 1
         else:
-            self.grow_pending = False
+            self.positions.pop()
 
         self.last_direction = self.direction
 
-    def grow(self):
-        self.grow_pending = True
+    def grow(self, amount=1):
+        self.grow_pending += amount
 
     def draw(self, surface):
         for i, (x, y) in enumerate(self.positions):
@@ -89,7 +93,22 @@ class Snake:
 
 class Food:
     def __init__(self, snake_positions):
+        # Food types: (color, point value, growth amount, lifetime in seconds)
+        self.food_types = [
+            {"color": RED, "points": 1, "growth": 1, "lifetime": None, "weight": 70},  # Regular food
+            {"color": GOLD, "points": 5, "growth": 2, "lifetime": 5, "weight": 15},  # Golden food (timed)
+            {"color": BLUE, "points": 2, "growth": 3, "lifetime": 8, "weight": 10},  # Blue food (timed)
+            {"color": PURPLE, "points": 10, "growth": 5, "lifetime": 3, "weight": 5}  # Purple food (timed, rare)
+        ]
+
+        # Choose food type based on weights
+        weights = [food["weight"] for food in self.food_types]
+        self.type = random.choices(self.food_types, weights=weights)[0]
+
+        # Set position and creation time
         self.position = self.get_random_position(snake_positions)
+        self.creation_time = time.time()
+        self.active = True
 
     def get_random_position(self, snake_positions):
         while True:
@@ -98,19 +117,32 @@ class Food:
             if (x, y) not in snake_positions:
                 return (x, y)
 
+    def update(self, current_time):
+        # Check if food should disappear
+        if self.type["lifetime"] and current_time - self.creation_time >= self.type["lifetime"]:
+            self.active = False
+
+    def get_remaining_time(self, current_time):
+        if not self.type["lifetime"]:
+            return None
+        return max(0, self.type["lifetime"] - (current_time - self.creation_time))
+
     def draw(self, surface):
+        if not self.active:
+            return
+
         rect = pygame.Rect(self.position[0] * GRID_SIZE, self.position[1] * GRID_SIZE, GRID_SIZE, GRID_SIZE)
-        pygame.draw.rect(surface, RED, rect)
+        pygame.draw.rect(surface, self.type["color"], rect)
         pygame.draw.rect(surface, BLACK, rect, 1)  # Border
 
-
-def draw_grid(surface):
-    # for y in range(0, HEIGHT, GRID_SIZE):
-    #     for x in range(0, WIDTH, GRID_SIZE):
-    #         rect = pygame.Rect(x, y, GRID_SIZE, GRID_SIZE)
-    #         pygame.draw.rect(surface, GRAY, rect, 1)
-    pass
-
+        # Draw timer for timed food
+        remaining = self.get_remaining_time(time.time())
+        if remaining:
+            # Draw timer text
+            timer_text = small_font.render(f"{int(remaining)}", True, WHITE)
+            text_x = self.position[0] * GRID_SIZE + (GRID_SIZE - timer_text.get_width()) // 2
+            text_y = self.position[1] * GRID_SIZE + (GRID_SIZE - timer_text.get_height()) // 2
+            surface.blit(timer_text, (text_x, text_y))
 
 def game_over_screen(surface, score):
     surface.fill(BLACK)
@@ -137,9 +169,30 @@ def game_over_screen(surface, score):
                     return False  # Quit game
 
 
+def draw_food_legend(surface):
+    legend_y = 50
+    title = small_font.render("Food Types:", True, WHITE)
+    surface.blit(title, (10, legend_y))
+    legend_y += 25
+
+    food_types = [
+        {"color": RED, "desc": "Regular: +1 pt"},
+        {"color": GOLD, "desc": "Gold: +5 pts, 5s"},
+        {"color": BLUE, "desc": "Blue: +2 pts, 8s"},
+        {"color": PURPLE, "desc": "Purple: +10 pts, 3s"}
+    ]
+
+    for food in food_types:
+        pygame.draw.rect(surface, food["color"], (10, legend_y, 15, 15))
+        pygame.draw.rect(surface, BLACK, (10, legend_y, 15, 15), 1)
+        text = small_font.render(food["desc"], True, WHITE)
+        surface.blit(text, (30, legend_y))
+        legend_y += 20
+
+
 def run_game():
     snake = Snake()
-    food = Food(snake.positions)
+    foods = [Food(snake.positions)]
     score = 0
 
     clock = pygame.time.Clock()
@@ -149,12 +202,21 @@ def run_game():
     global move_timer
     move_timer = 0
 
+    # Food spawn timer
+    food_spawn_timer = 0
+    food_spawn_interval = 5  # New food every 5 seconds
+
     while running:
+        current_time = time.time()
+
         # Calculate delta time in seconds
         dt = clock.tick(0) / 1000.0  # Uncapped framerate
 
         # Update movement timer
         move_timer += dt
+
+        # Update food spawn timer
+        food_spawn_timer += dt
 
         # Handle events
         for event in pygame.event.get():
@@ -173,28 +235,40 @@ def run_game():
                     snake.set_direction((1, 0))
 
         # Move snake at fixed intervals regardless of framerate
+        global move_interval
         if move_timer >= move_interval:
             snake.move()
             move_timer = 0  # Reset timer
 
             # Check for collisions with food
-            if snake.get_head_position() == food.position:
-                snake.grow()
-                food = Food(snake.positions)
-                score += 1
+            for food in foods[:]:
+                if food.active and snake.get_head_position() == food.position:
+                    snake.grow(food.type["growth"])
+                    score += food.type["points"]
+                    foods.remove(food)
 
-                # Increase speed as score increases
-                global mv_i
-                mv_i = max(0.05, 0.1 - (score * 0.001))
+                    # Increase speed as score increases
+                    move_interval = max(0.05, 0.1 - (score * 0.001))
+
+        # Update food timers and remove expired food
+        for food in foods[:]:
+            food.update(current_time)
+            if not food.active:
+                foods.remove(food)
+
+        # Spawn new food occasionally
+        if food_spawn_timer >= food_spawn_interval:
+            food_spawn_timer = 0
+            # Limit total number of foods on screen
+            if len(foods) < 5:
+                foods.append(Food(snake.positions))
 
         # Fill background
         screen.fill(BLACK)
 
-        # Draw grid
-        draw_grid(screen)
-
-        # Draw food and snake
-        food.draw(screen)
+        # Draw foods and snake
+        for food in foods:
+            food.draw(screen)
         snake.draw(screen)
 
         # Display score and FPS
@@ -202,6 +276,9 @@ def run_game():
         fps_text = font.render(f"FPS: {int(clock.get_fps())}", True, WHITE)
         screen.blit(score_text, (10, 10))
         screen.blit(fps_text, (WIDTH - fps_text.get_width() - 10, 10))
+
+        # Draw food legend
+        draw_food_legend(screen)
 
         # Update display
         pygame.display.flip()
